@@ -1,0 +1,764 @@
+---
+title: "COVID19"
+author: "Thomas Bohn"
+date: "2023-04-20"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+### Data Science Process
+
+The following report follows the Data Science Process from beginning to end, ensuring there is a discussion on the following areas in the flow:
+
+* Import
+* Tidy
+* Transform
+* Visualize
+* Model
+* Communicate
+
+### Overview of Report Structure
+
+The following report will contain the following sections:
+
+* __Background__: Why should I care?
+* __Data Source__: Where is your data from?
+* __Tidying and Transform the Data__: How has the data been cleaned and transformed?
+* __Analysis and Visualizations__: What does it tell you?
+* __Models & Conclusions__: What do you conclude?
+* __Review of Bias__: How could you be wrong?
+
+By including comprehensive details in a well structured document, the results and findings of this analysis should be reproducible for any user.
+
+### R Libraries Utilized
+
+The analysis in this report will utilize the following libraries in R for Data Analysis:
+
+```{r library, echo=TRUE, message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(rvest)
+library(xml2)
+library(car)
+```
+
+## Background
+
+### What is COVID-19
+
+> "Coronavirus disease 2019 (COVID-19) is a contagious disease caused by a virus, the severe acute respiratory syndrome coronavirus 2 (SARS-CoV-2). The first known case was identified in Wuhan, China, in December 2019. The disease quickly spread worldwide, resulting in the COVID-19 pandemic.
+>
+> The symptoms of COVID‑19 are variable but often include fever, cough, headache, fatigue, breathing difficulties, loss of smell, and loss of taste. Symptoms may begin one to fourteen days after exposure to the virus. At least a third of people who are infected do not develop noticeable symptoms. Of those who develop symptoms noticeable enough to be classified as patients, most (81%) develop mild to moderate symptoms (up to mild pneumonia), while 14% develop severe symptoms (dyspnea, hypoxia, or more than 50% lung involvement on imaging), and 5% develop critical symptoms (respiratory failure, shock, or multiorgan dysfunction). Older people are at a higher risk of developing severe symptoms. Some people continue to experience a range of effects (long COVID) for months after recovery, and damage to organs has been observed. Multi-year studies are underway to further investigate the long-term effects of the disease.[13]
+>
+> COVID‑19 transmits when infectious particles are breathed in or come into contact with the eyes, nose, or mouth. The risk is highest when people are in close proximity, but small airborne particles containing the virus can remain suspended in the air and travel over longer distances, particularly indoors. Transmission can also occur when people touch their eyes, nose or mouth after touching surfaces or objects that have been contaminated by the virus. People remain contagious for up to 20 days and can spread the virus even if they do not develop symptoms."
+
+see the the [COVID-19](https://en.wikipedia.org/wiki/COVID-19) article on Wikipedia for more details on this disease.
+
+## Data Source
+
+### Source of Data
+
+The data used for the COVID-19 analysis is sourced from the __COVID-19 Data Repository by the Center for Systems Science and Engineering (CSSE) at Johns Hopkins University__. It can be found the following the following Github URL: <https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data> 
+
+This is the data repository for the 2019 Novel Corona virus Visual Dashboard operated by the Johns Hopkins University Center for Systems Science and Engineering (JHU CSSE). Also, Supported by ESRI Living Atlas Team and the Johns Hopkins University Applied Physics Lab (JHU APL).
+
+__Note__: On March 10, 2023, the Johns Hopkins Corona virus Resource Center ceased its collecting and reporting of global COVID-19 data.
+
+### Import Core Data
+
+```{r build_urls, echo=TRUE}
+#Build URLs to Access the Data on Github
+url_base <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/"
+
+url_in <- str_c(url_base, "csse_covid_19_data/csse_covid_19_time_series/")
+
+file_names <- c("time_series_covid19_confirmed_US.csv",
+                "time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_US.csv",
+                "time_series_covid19_deaths_global.csv"
+)
+
+urls <- str_c(url_in,file_names)
+
+url_in_uid <- str_c(url_base, "csse_covid_19_data/")
+file_names_uid <- "UID_ISO_FIPS_LookUp_Table.csv"
+url_uid <- str_c(url_in_uid,file_names_uid)
+
+urls
+url_uid
+```
+```{r read_data, echo=TRUE, message=FALSE}
+#Read in the data to data sets in R
+cases_us      <- read_csv(urls[1])
+cases_global  <- read_csv(urls[2])
+deaths_us     <- read_csv(urls[3])
+deaths_global <- read_csv(urls[4])
+uid           <- read_csv(url_uid)
+```
+
+```{r head_data, echo=TRUE}
+#Preview the dataset
+cases_us
+cases_global
+deaths_us
+deaths_global
+uid
+```
+
+### Import Party Affiliation Data
+
+```{r import_party_data, echo=TRUE}
+#Define the URL of the webpage that needs to be scraped for party data
+url <- "https://www.pewresearch.org/religion/religious-landscape-study/compare/party-affiliation/by/state/"
+#head the html page and extract the table containing the data from the page
+party_aff <- url %>%
+  read_html() %>%
+  html_nodes(xpath='//*[@id="page-23474"]/div[2]/section/div[3]/table') %>%
+  html_table()
+#strip the table around the table
+party_aff <- party_aff[[1]]
+#cast the data frame as a tibble and repair the table names
+party_aff <- as_tibble(party_aff, .name_repair = make.names)
+party_aff <- party_aff %>%
+  #rename the columns to shorter names
+  rename(
+    state = "State",
+    rep = "Republican.lean.Rep.",
+    no_lean = "No.lean",
+    dem = "Democrat.lean.Dem.",
+    sample_size = "Sample.size"
+  ) %>%
+  #assign the numeric columns as integers
+  mutate(
+    rep = as.integer(parse_number(rep)),
+    no_lean = as.integer(parse_number(no_lean)),
+    dem = as.integer(parse_number(dem)),
+    sample_size = as.integer(parse_number(sample_size))
+  ) %>%
+  #assign the state to a factor
+  mutate(
+    state = factor(state)
+  )
+#preview the table
+party_aff
+str(party_aff)
+```
+
+## Tidying the Data
+
+The following outlines how the data was modified to be tidy and transformed to contain variables for further analysis.  This section contains:
+
+* A summary of the data
+* Clean up of the dataset by changing appropriate variables to factors, updating date types, and getting rid of any columns not needed
+* Transforming the data to add useful variables and derived elements
+* Summary of the data to be sure there is no missing data
+
+### Data Summerization
+
+Given the extremely wide nature of the data, no additional summarization results will be displayed here in the report. Commented out code is included for completeness, but outputs extremely long results.
+
+```{r create_list_table_names, echo=TRUE}
+#Show the structure of the datasets
+table_names <- c(cases_us, cases_global, deaths_us, deaths_global, uid)
+```
+
+```{r show_uid_details, echo=TRUE, eval=FALSE, results='hide'}
+#Show the structure of the datasets
+#str(cases_us)
+#str(cases_global)
+#str(deaths_us)
+#str(deaths_global)
+#str(uid)
+```
+
+```{r summary_data, echo=TRUE, eval=FALSE, results='hide'}
+#Summary of the dataset
+#summary(cases_us)
+#summary(cases_global)
+#summary(deaths_us)
+#summary(deaths_global)
+#summary(uid)
+```
+
+```{r display_column_names, eval=FALSE, results='hide'}
+#Show the column names of the columns in datasets
+#str_to_lower(colnames(cases_us))
+#str_to_lower(colnames(cases_global))
+#str_to_lower(colnames(deaths_us))
+#str_to_lower(colnames(deaths_global))
+#str_to_lower(colnames(uid))
+```
+
+### Scope for Initial Tidy & Transform
+
+List of initial tidy adjustments to make:
+
+* Shape data to vastly reduce the number of columns in each dataset and make the datasets longer (versus their current wide configuration)
+* Drop columns that will not be needed for analysis
+* Rename columns and update data types (especially for integers and dates)
+* Join data to consolidate data elements into a table for US and Global
+
+### Tidy & Transform of the UID Data
+
+```{r tidy_uid, echo=TRUE}
+#Remove columns not needed for analysis
+tidy_uid <- uid %>%
+  select(-c("Lat","Long_", "iso2", "iso3", "code3", "Admin2"))
+head(tidy_uid, n=3)
+```
+
+### Tidy & Transform of the Cases Global and Deaths Global Data
+
+```{r tidy_cases_global, echo=TRUE}
+#Tidy Cases Global
+tidy_cases_global <- cases_global %>%
+  pivot_longer(cols = -c('Province/State', 'Country/Region', 'Lat', 'Long'),
+               names_to = "Date",
+               values_to = "Cases") %>%
+  select(-c("Lat","Long"))
+head(tidy_cases_global, n=3)
+```
+
+```{r tidy_deaths_global, echo=TRUE}
+#Tidy Deaths Global
+tidy_deaths_global <- deaths_global %>%
+  pivot_longer(cols = -c('Province/State', 'Country/Region', 'Lat', 'Long'),
+               names_to = "Date",
+               values_to = "Deaths") %>%
+  select(-c("Lat","Long"))
+head(tidy_deaths_global, n=3)
+```
+
+```{r create_global, echo=TRUE}
+#Combine Global Deaths and Cases
+tidy_global <- tidy_cases_global %>%
+  full_join(tidy_deaths_global) %>%
+  rename(Country_Region = `Country/Region`,
+         Province_State = `Province/State`) %>%
+  mutate(Date = mdy(Date)) %>%
+  filter(Cases > 0)
+head(tidy_global, n=3)
+```
+
+```{r add_population_to_global, echo=TRUE}
+#Add Population and Combined Key to Global Data Set
+tidy_global <- tidy_global %>%
+  left_join(uid, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, Date, Cases,
+         Deaths, Population, Combined_Key)
+head(tidy_global, n=3)
+```
+
+### Validate the Tidy & Transform for Global Cases and Deaths
+
+```{r summary_global, echo=TRUE}
+#Display summary of global dataset
+summary(tidy_global)
+```
+
+```{r str_global, echo=TRUE}
+#Display structure of global dataset
+str(tidy_global)
+```
+
+```{r coly_global, echo=TRUE}
+#Display results of Global Data Set
+colnames(tidy_global)
+```
+### Tidy & Transform for the US Cases and Deaths Data
+
+```{r tidy_cases_us, echo=TRUE}
+#Tidy US Cases Data
+tidy_cases_us <- cases_us %>%
+  pivot_longer(cols = -c('UID', 'iso2', 'iso3', 'code3', 'FIPS', 'Admin2',
+                         'Province_State', 'Country_Region', 'Lat',
+                         'Long_', 'Combined_Key'),
+               names_to = "Date",
+               values_to = "Cases") %>%
+  select(-c('UID', 'iso2', 'iso3', 'code3', 'FIPS')) %>%
+  select(-c("Lat","Long_")) %>%
+  mutate(Date = lubridate::mdy(Date))
+head(tidy_cases_us, n=3)
+```
+
+```{r tidy_deaths_us, echo=TRUE}
+#Tidy US Deaths Data)
+tidy_deaths_us <- deaths_us %>%
+  pivot_longer(cols = -c('UID', 'iso2', 'iso3', 'code3', 'FIPS', 'Admin2',
+                         'Province_State', 'Country_Region', 'Lat',
+                         'Long_', 'Combined_Key', 'Population'),
+               names_to = "Date",
+               values_to = "Deaths") %>%
+  select(-c('UID', 'iso2', 'iso3', 'code3', 'FIPS')) %>%
+  select(-c("Lat","Long_")) %>%
+  mutate(Date = lubridate::mdy(Date))
+head(tidy_deaths_us, n=3)
+```
+
+```{r create_us, echo=TRUE}
+#Combine US cases and deaths data into one dataset
+tidy_us <- tidy_cases_us %>%
+  full_join(tidy_deaths_us) %>%
+  rename(County = `Admin2`) %>%
+  filter(Cases > 0)
+head(tidy_us, n=3)
+```
+
+### Validate the Tidy & Transform for US Cases and Deaths
+
+```{r summary_us, echo=TRUE}
+#Display summary of us dataset
+summary(tidy_us)
+```
+
+```{r str_us, echo=TRUE}
+#Display structure of us dataset
+str(tidy_us)
+```
+
+```{r coly_us, echo=TRUE}
+#Display results of us Data Set
+colnames(tidy_us)
+```
+
+## Analysis and Visualizations
+
+Through analysis and visualization, I would like to look at factors and trends that influence COVID19 cases and deaths. In order to better understand the factors that contribute to the global pandemics. I'd like to do some analysis around the following areas:
+
+* What Does the Trend of Cases and Deaths look like overall for the US?
+* What Does the Trend of Cases and Deaths look like overall for Illinois?
+* What is the Largest Total Deaths and Date in the covid19 in the US Plot?
+* How do New Deaths and New Cases Trend Over Time in the US?
+* How do New Deaths and New Cases Trend Over Time for the State of Illinois?
+* Create a List of the Top 10 Best and Worst State for covid19 Deaths per Thousand People?
+
+### What Does the Trend of Cases and Deaths look like overall for the US?
+
+```{r us_by_state, echo=TRUE}
+#Create a US by State View
+us_by_state <- tidy_us %>%
+  group_by(Province_State, Country_Region, Date) %>%
+  summarize(
+    Cases = sum(Cases),
+    Deaths = sum(Deaths),
+    Population = sum(Population)
+  ) %>%
+  mutate(Deaths_Per_Mill = Deaths * 1000000 / Population) %>%
+  select(Province_State, Country_Region, Date, Cases,
+         Deaths, Deaths_Per_Mill, Population) %>%
+  ungroup()
+head(us_by_state, n = 3)
+```
+
+```{r us_totals, echo=TRUE}
+#Create a US Total View
+us_totals <- us_by_state %>%
+  group_by(Country_Region, Date) %>%
+  summarize(Cases = sum(Cases), Deaths = sum(Deaths),
+            Population = sum(Population)) %>%
+  mutate(Deaths_Per_Mill = Deaths * 1000000 / Population) %>%
+  select(Country_Region, Date, Cases, Deaths, Deaths_Per_Mill, Population) %>%
+  ungroup()
+head(us_by_state, n = 3)
+```
+
+```{r us_totals_viz, echo=TRUE, warning=FALSE}
+#Create US Totals Visualization
+us_totals %>%
+  filter(Cases > 0) %>%
+  ggplot(aes(x = Date, y = Cases)) +
+  geom_line(aes(color = "Cases")) +
+  geom_point(aes(color = "Cases")) + 
+  geom_line(aes(y = Deaths, color = "Deaths")) +
+  geom_point(aes(y = Deaths, color = "Deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Covid19 in US", y = NULL)
+```
+```{r us_totals_zoom_viz, echo=TRUE, warning=FALSE}
+#Create US Totals Visualization
+us_totals %>%
+  filter(Cases > 0 & Date > "2022-01-01") %>%
+  ggplot(aes(x = Date, y = Cases)) +
+  geom_line(aes(color = "Cases")) +
+  geom_point(aes(color = "Cases")) + 
+  geom_line(aes(y = Deaths, color = "Deaths")) +
+  geom_point(aes(y = Deaths, color = "Deaths")) +
+  #scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Covid19 in US", y = NULL)
+```
+
+__Conclusion__: This plot displays the cumulative total for the US. Given the extremely large number of cases and the log scale, it is hard to tell for recent data how much the chart is increasing and if cases and deaths are going up on a daily basis. Overall, it displays that there was a sharp increase initially, but then cases began to taper off and grow slower than exponential. Looking at the zoomed in chart on 2022 (with the log scale removed, we see growth that looks more linear than exponential.
+
+### What Does the Trend of Cases and Deaths look like overall for Illinois?
+
+```{r ill_totals_viz, echo=TRUE, warning=FALSE}
+#Filter for New York and Create State Visualization
+state <- "Illinois"
+us_by_state %>%
+  filter(Province_State == state) %>%
+  filter(Cases > 0) %>%
+  ggplot(aes(x = Date, y = Cases)) +
+  geom_line(aes(color = "Cases")) +
+  geom_point(aes(color = "Cases")) + 
+  geom_line(aes(y = Deaths, color = "Deaths")) +
+  geom_point(aes(y = Deaths, color = "Deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c("Covid19 in ", state), y = NULL)
+```
+
+__Conclusion__: Comparing Illinois to the US totals, we see a similar pattern. Extream growth of cases initially, then it tapers off on the log scale graph. Overall, the macro patterns look the same for both.
+
+### What is the Largest Total Deaths and Date in the Covid in the US Plot?
+
+```{r us_totals_questions, echo=TRUE}
+max(us_totals$Date)
+max(us_totals$Deaths)
+```
+__Conclusion__: The largest data point for the US is 1,122,724 total cases and occurs on 2023-03-09.
+
+### How do New Deaths and New Cases Trend Over Time in the US?
+
+```{r add_new_cases, echo=TRUE}
+#Add New Cases and New Deaths calculated field to the US state view
+us_by_state <- us_by_state %>%
+  mutate(New_Cases = Cases - lag(Cases),
+       New_Deaths = Deaths - lag(Deaths))
+#Add New Cases and New Deaths calculated field to the US totals view
+us_totals <- us_totals %>%
+  mutate(New_Cases = Cases - lag(Cases),
+       New_Deaths = Deaths - lag(Deaths))
+```
+
+
+```{r describe_new_cases, echo=TRUE}
+#Display the changes to the two tables
+tail(us_by_state %>% select(New_Cases, New_Deaths, everything()))
+tail(us_totals %>% select(New_Cases, New_Deaths, everything()))
+```
+
+```{r us_new_totals_viz, echo=TRUE, warning=FALSE}
+#Create US totals visualization for New Deaths and New Cases
+us_totals %>%
+  filter(New_Cases > 0) %>%
+  ggplot(aes(x = Date, y = New_Cases)) +
+  geom_line(aes(color = "New_Cases")) +
+  geom_point(aes(color = "New_Cases")) + 
+  geom_line(aes(y = New_Deaths, color = "New_Deaths")) +
+  geom_point(aes(y = New_Deaths, color = "New_Deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Covid19 in US", y = NULL)
+```
+```{r us_new_totals_zoom_viz, echo=TRUE, warning=FALSE}
+#Create US totals visualization for New Deaths and New Cases
+us_totals %>%
+  filter(New_Cases > 0 & Date > "2022-01-01") %>%
+  ggplot(aes(x = Date, y = New_Cases)) +
+  geom_line(aes(color = "New_Cases")) +
+  geom_point(aes(color = "New_Cases")) + 
+  geom_line(aes(y = New_Deaths, color = "New_Deaths")) +
+  geom_point(aes(y = New_Deaths, color = "New_Deaths")) +
+  #scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Covid19 in US", y = NULL)
+```
+
+__Conclusion__: When we observe new cases and deaths, we see a peak for growth occurring around the beginning of the year in 2022. We then actually see the number begin to trend down. Zooming in on the data after 2022 and removing the log scale, we see some fluctuations in the data, but new cases and new deaths appear to be mostly flat, indicating linear growth.
+
+### How do New Deaths and New Cases Trend Over Time for the State of Illinois?
+
+```{r illinois_new_totals_viz, echo=TRUE, warning=FALSE}
+#Create Illinois totals visualization for New Deaths and New Cases
+state <- "Illinois"
+us_by_state %>%
+  filter(Province_State == state & New_Cases > 0) %>%
+  ggplot(aes(x = Date, y = New_Cases)) +
+  geom_line(aes(color = "New_Cases")) +
+  geom_point(aes(color = "New_Cases")) + 
+  geom_line(aes(y = New_Deaths, color = "New_Deaths")) +
+  geom_point(aes(y = New_Deaths, color = "New_Deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "right",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c("Covid19 in ", state), y = NULL,
+       fill = "Color")
+```
+```{r illinois_zoom_new_totals_viz, echo=TRUE, warning=FALSE}
+#Create Illinois totals visualization for New Deaths and New Cases
+state <- "Illinois"
+us_by_state %>%
+  filter(Province_State == state
+         & New_Cases > 0
+         & Date > "2022-01-01") %>%
+  ggplot(aes(x = Date, y = New_Cases)) +
+  geom_line(aes(color = "New_Cases")) +
+  geom_point(aes(color = "New_Cases")) + 
+  geom_line(aes(y = New_Deaths, color = "New_Deaths")) +
+  geom_point(aes(y = New_Deaths, color = "New_Deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "right",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c("Covid19 in ", state), y = NULL,
+       fill = "Color")
+```
+__Conclusion__: When we observe new cases and deaths, we see a peak for growth occurring around the beginning of the year in 2022. We then actually see the number begin to trend down. Zooming in on the data after 2022 and removing the log scale, we see some fluctuations in the data, but new cases and new deaths appear to be mostly flat, indicating linear growth.
+
+### Create a List of the Top 10 Best and Worst State for Covid19 Deaths per Thousand People?
+
+```{r us_state_totals, echo=TRUE}
+#Aggregate the table to remove the time element
+#and create granularity at the state level
+us_state_totals <- us_by_state %>%
+  group_by(Province_State) %>%
+  summarize(Cases = max(Cases), Deaths = max(Deaths),
+            Population = max(Population),
+            Cases_Per_Thou = 1000* Cases / Population,
+            Deaths_Per_Thou = 1000* Deaths / Population) %>%
+  filter(Cases > 0, Population > 0)
+```
+
+```{r us_state_totals_slice_min, echo=TRUE}
+#Create a List of the Top 10 Best States
+us_state_totals %>%
+  slice_min(Deaths_Per_Thou, n = 10) %>%
+  select(Deaths_Per_Thou, Cases_Per_Thou, everything())
+```
+```{r us_state_min_plot, echo=TRUE}
+#plot the actual values and predictions
+us_state_totals %>%
+  slice_min(Deaths_Per_Thou, n = 10) %>%
+  select(Deaths_Per_Thou, Cases_Per_Thou, everything()) %>%
+  ggplot(aes(x = Deaths_Per_Thou, y = reorder(Province_State, -Deaths_Per_Thou),
+             fill = Deaths_Per_Thou)) +
+  geom_bar(stat = "identity") +
+  theme(legend.position = "right",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Top 10 US States with the Lowest Deaths per Thousand", y = NULL,
+       fill = "Deaths per Thousand") +
+  xlab("State") +
+  ylab("Deaths per Thousand")
+```
+
+__Conclusion__: Looking at the states with the lowest deaths per thousand, we see that remote locations such as islands or low population locations seem to do better with deaths.
+
+```{r us_state_totals_slice_max, echo=TRUE}
+#Create a List of the Top 10 Worst States
+us_state_totals %>%
+  slice_max(Deaths_Per_Thou, n = 10) %>%
+  select(Deaths_Per_Thou, Cases_Per_Thou, everything())
+```
+```{r us_state_max_plot, echo=TRUE}
+#plot the actual values and predictions
+us_state_totals %>%
+  slice_max(Deaths_Per_Thou, n = 10) %>%
+  select(Deaths_Per_Thou, Cases_Per_Thou, everything()) %>%
+  ggplot(aes(x = Deaths_Per_Thou, y = reorder(Province_State, Deaths_Per_Thou),
+             fill = Deaths_Per_Thou)) +
+  geom_bar(stat = "identity") +
+  theme(legend.position = "right",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Top 10 US States with the Highest Deaths per Thousand", y = NULL,
+       fill = "Deaths per Thousand") +
+  xlab("State") +
+  ylab("Deaths per Thousand")
+```
+
+__Conclusion__: There is less of an obvious pattern here for the top 10 states with the highest deaths per thousand people. If we had to categorize them based on properties, we might say they skew towards the southern US region and are more republican than democratic in their political views.
+
+### Additional Questions to Explore and Investigate
+
+After completing some initial analysis and visualization, there is much more to explore and investigate.  The following is a list of some potential questions to answer:
+
+1. What are the results of the analysis when looking at the global data vs. the US data? Do we see more or less variance?
+1. How does political affiliation effect covid19 cases and deaths?
+1. How does average temperature for the date effect covid19 cases and deaths?
+1. Is there a relationship between the population and the number of covid19 deaths?
+
+## Models & Conclusions
+
+Using our dataset, we will investigate if there are enough factors available in the dataset to create a strong predictive model for covid19 deaths per thousand people.
+
+### Create a Basic Linear Prediction Models
+
+```{r peek_us_state_totals_over_time, echo=TRUE}
+#show the data source to be used in the model
+head(us_state_totals, n = 3)
+```
+
+```{r us_state_totals_scatter, echo=TRUE}
+#build a Scatter Plot of cases per thousand vs. deaths per thousand
+us_state_totals %>%
+  ggplot(aes(x = Cases_Per_Thou, y = Deaths_Per_Thou)) +
+  geom_point(color = "blue") + 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "US State Cases per Thousand vs Deaths per Thousand", y = NULL,
+       fill = "Delta") +
+  xlab("Cases per Thousand") +
+  ylab("Deaths per Thousand")
+```
+
+```{r create_linear_model, echo=TRUE}
+#create the Prediction Model
+mod <- lm(Deaths_Per_Thou ~ Cases_Per_Thou, data = us_state_totals)
+summary(mod)
+```
+
+```{r add_predictions_to_data_frame, echo=TRUE}
+#Add the predictions to a data frame
+us_state_totals_w_pred <- us_state_totals %>%
+  modelr::add_predictions(mod)
+us_state_totals_w_pred
+```
+
+```{r plot_us_state_totals_w_pred, echo=TRUE}
+#plot the actual values and predictions
+us_state_totals_w_pred %>% ggplot() +
+  geom_point(aes(x = Cases_Per_Thou, y = Deaths_Per_Thou), color = "blue") +
+  geom_point(aes(x = Cases_Per_Thou, y = pred), color = "red") + 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "US State Cases per Thousand vs Deaths per Thousand", y = NULL) +
+  xlab("Cases per Thousand") +
+  ylab("Deaths per Thousand")
+```
+
+### Create a Basic Linear Prediction Models Against Additional Factors
+
+In this section we will be additional models against the factors of % Republican Affiliation and Population of the state to see if we can improve our model of prediction.
+
+```{r peek_part_aff, echo=TRUE}
+#show the data source to be used in the model
+head(us_state_totals, n = 3)
+head(party_aff, n = 3)
+```
+
+```{r us_state_totals_with_party, echo=TRUE}
+#add the party affiliation data to the US data
+#drop any rows that don't have party date (should get 51 states)
+us_state_totals_with_party <- us_state_totals %>%
+  inner_join(party_aff, by = join_by(Province_State == state))
+head(us_state_totals_with_party, n = 3)
+```
+
+```{r party_aff_scatter, echo=TRUE}
+#build a Scatter Plot of Deaths per Thousand vs. Percent Republican
+us_state_totals_with_party %>%
+  ggplot(aes(x = rep, y = Deaths_Per_Thou)) +
+  geom_point(aes(color = "rep")) + 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "US Deaths per Thousand vs Percent Republican in State",
+       y = NULL) +
+  xlab("Percent Republican Affiliation") +
+  ylab("Deaths per Thousand")
+```
+```{r pop_scatter, echo=TRUE}
+#build a Scatter Plot of Deaths per Thousand vs. Population
+us_state_totals_with_party %>%
+  ggplot(aes(x = Population, y = Deaths_Per_Thou)) +
+  geom_point(aes(color = "Population")) + 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "US Deaths per Thousand vs Population in State",
+       y = NULL) +
+  xlab("Population") +
+  ylab("Deaths per Thousand")
+```
+
+```{r party_aff_create_linear_model, echo=TRUE}
+#create the Prediction Model
+mod_party <- lm(Deaths_Per_Thou ~ rep, data = us_state_totals_with_party)
+summary(mod_party)
+```
+```{r pop_create_linear_model, echo=TRUE}
+#create the Prediction Model
+mod_pop <- lm(Deaths_Per_Thou ~ Population, data = us_state_totals_with_party)
+summary(mod_pop)
+```
+
+
+```{r party_aff_cases_create_linear_model, echo=TRUE}
+#create the Prediction Model
+mod_cases_party_pop <- lm(Deaths_Per_Thou ~ rep + Cases_Per_Thou
+                          + Population, data = us_state_totals_with_party)
+summary(mod_cases_party_pop)
+```
+
+```{r party_aff_add_predictions_to_data_frame, echo=TRUE}
+#Add the predictions to a data frame
+us_state_totals_with_party <- us_state_totals_with_party %>%
+  modelr::add_predictions(mod_party, var = "pred_party")  %>%
+  modelr::add_predictions(mod_pop, var = "pred_pop")  %>%
+  modelr::add_predictions(mod_cases_party_pop, var = "pred_cases_party_pop")  %>%
+  mutate(delta_mod_cases_party_pop = Deaths_Per_Thou - pred_cases_party_pop)
+us_state_totals_with_party
+```
+
+```{r plot_model_delta_w_pred, echo=TRUE}
+#plot the actual values and predictions
+us_state_totals_with_party %>% ggplot(aes(x = Province_State,
+                                y = delta_mod_cases_party_pop,
+                                fill = delta_mod_cases_party_pop)) +
+  geom_bar(stat = "identity") +
+  theme(legend.position = "right",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Pridiction Delta for Model", y = NULL,
+       fill = "Delta") +
+  xlab("State") +
+  ylab("Delta in Model Prediction")
+```
+```{r plot_avPlots, echo=TRUE}
+#plot the actual values and predictions
+avPlots(mod_cases_party_pop)
+```
+
+__Conclusion__: Overall, there is some potential for the fact model using the cases per thousand, percent republican, affiliation, and population, but the predictive model is not very strong.  Additional variables are likely needed to improve the accuracy of the prediction.  Through this process these current variables explored might be replaced by more predictive variables. However, with a low confidence, we can say that an increase in all 3 of these factors for your state may make you more vulnerable to deaths from covid19.
+
+### Conclusions
+
+After completing the analysis of data, visualization, and modeling, we can conclude the following:
+
+| Question                                  |  Conclusion                                  |
+|-------------------------------------------|----------------------------------------------|
+| What Does the Trend of Cases and Deaths look like overall for the US?         | This plot displays the cumulative total for the US. Given the extremely large number of cases and the log scale, it is hard to tell for recent data how much the chart is increasing and if cases and deaths are going up on a daily basis. Overall, it displays that there was a sharp increase initially, but then cases began to taper off and grow slower than exponential. Looking at the zoomed in chart on 2022 (with the log scale removed, we see growth that looks more linear than exponential. | 
+| What Does the Trend of Cases and Deaths look like overall for Illinois? | Comparing Illinois to the US totals, we see a similar pattern. Extreme growth of cases initially, then it tapers off on the log scale graph. Overall, the macro patterns look the same for both. |
+| What is the Largest Total Deaths and Date in the covid19 in the US Plot?      | The largest data point for the US is 1,122,724 total cases and occurs on 2023-03-09. |
+| How do New Deaths and New Cases Trend Over Time in the US?  | When we observe new cases and deaths, we see a peak for growth occurring around the beginning of the year in 2022. We then actually see the number begin to trend down. Zooming in on the data after 2022 and removing the log scale, we see some fluctuations in the data, but new cases and new deaths appear to be mostly flat, indicating linear growth. |
+| How do New Deaths and New Cases Trend Over Time for the State of Illinois?       | When we observe new cases and deaths, we see a peak for growth occurring around the beginning of the year in 2022. We then actually see the number begin to trend down. Zooming in on the data after 2022 and removing the log scale, we see some fluctuations in the data, but new cases and new deaths appear to be mostly flat, indicating linear growth. |
+| Create a List of the Top 10 Best and Worst State for covid19 Deaths per Thousand People?          | Looking at the states with the lowest deaths per thousand, we see that remote locations such as islands or low population locations seem to do better with deaths. There is less of an obvious pattern here for the top 10 states with the highest deaths per thousand people. If we had to categorize them based on properties, we might say they skew towards the southern US region and are more republican than democratic in their political views. |
+| Can we create a usable predictive model for covid19 deaths per thousand people using our US dataset?     | In short, No. A significant predictive model cannot be created with the 3 state level variables in our dataset.  Additional variables will need to be explored to develop a usable model. |
+
+## Review of Bias
+
+Considering Bias, I would place it into 3 categories:
+
+1. Who is providing the data
+2. Who is collecting the data
+3. Who is analyzing the data
+
+__Provider__: In the United States, data was provide by individuals and the hospital systems.  Some people may have not reported positive cases when they were doing at home tests.  Each hospital system likely had its own methodology of collecting the data to provide.
+
+__Collector__: In the United States, each state was responsible for collecting covid19 data about cases and deaths. Through news media, we saw that there was some effort within state governments to manipulate the case numbers (or possible death numbers). How the state felt about covid19 may have influenced the outcome of the collection process.
+
+__Analyzer__: As the analyst, I bring my own biases to the data. I am an urban resident in Illinois, so my covid19 experience is shaped by experience in this state. I'm also a Democrat and at scale the bias that political affiliation brought to covid19 shaped opinions across the political spectrum,  I also not a subject matter expert in epidemiology and may not interpret the details or factors or trends correctly.
+
+## Session Summary
+
+```{r session_info, echo=TRUE}
+sessionInfo()
+```
